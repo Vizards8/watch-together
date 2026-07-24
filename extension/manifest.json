@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "一起看",
+  "version": "1.0.0",
+  "description": "异地一起看视频：同步 B站/腾讯视频/爱奇艺 的播放、暂停、进度",
+  "permissions": ["storage", "tabs"],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "一起看"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.bilibili.com/*",
+        "*://v.qq.com/*",
+        "*://*.iqiyi.com/*"
+      ],
+      "js": ["content.js"],
+      "all_frames": true,
+      "run_at": "document_idle"
+    }
+  ]
+}
