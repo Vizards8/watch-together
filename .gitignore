@@ -12,3 +12,8 @@ watch-together-signing-key.pem
 *.crx
 # 构建产物
 watch-together-store.zip
+# 根目录临时截图与生成脚本（正式图在 screenshots/）
+pic*.png
+shot*.png
+make_screenshots.py
+make_icon.py
