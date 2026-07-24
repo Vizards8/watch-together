@@ -35,8 +35,10 @@
 
 ## 联系方式
 
-如对本隐私政策有任何疑问，可通过项目仓库提交 issue：
-https://github.com/Vizards8/watch-together/issues
+如对本隐私政策有任何疑问，可通过以下方式联系：
+
+- 邮箱：Vizards8@outlook.com
+- 项目 issue：https://github.com/Vizards8/watch-together/issues
 
 ## 变更
 

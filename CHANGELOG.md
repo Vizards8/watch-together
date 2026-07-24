@@ -5,6 +5,12 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.2.1] - 2026-07-25
+
+### 变更
+- 优化插件描述文案，面向公开发布，更清晰地说明使用场景
+- 完善 Chrome 网上应用店上架材料与隐私政策，准备公开发布
+
 ## [1.2.0] - 2026-07-25
 
 ### 新增
@@ -62,7 +68,8 @@
 - 断线自动重连：网络抖动后每 3 秒重连一次
 - 换集/切清晰度：播放器重建 video 元素时每 2 秒自动重新绑定
 
-[未发布]: https://github.com/Vizards8/watch-together/compare/v1.2.0...HEAD
+[未发布]: https://github.com/Vizards8/watch-together/compare/v1.2.1...HEAD
+[1.2.1]: https://github.com/Vizards8/watch-together/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/Vizards8/watch-together/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/Vizards8/watch-together/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/Vizards8/watch-together/compare/v1.0.0...v1.1.0
