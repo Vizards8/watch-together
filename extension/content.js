@@ -313,6 +313,9 @@
     });
 
     enableDrag(root, bar);
+
+    // 若当前正处于全屏，面板要挂到全屏元素里才可见
+    relocatePanel();
   }
 
   function submitChat() {
@@ -427,6 +430,23 @@
     }
     return true; // 异步 sendResponse
   });
+
+  // ---------- 全屏适配 ----------
+  // 进入全屏后，浏览器只渲染全屏元素及其子树，挂在 documentElement 下的面板会被隐藏。
+  // 所以全屏时把面板移进全屏元素内部，退出时移回来。面板是 position:fixed，
+  // 仍以视口定位，移动后位置不受影响。
+  function relocatePanel() {
+    if (!panel.root) return;
+    const fsEl =
+      document.fullscreenElement || document.webkitFullscreenElement || null;
+    const target = fsEl || document.documentElement;
+    if (panel.root.parentNode !== target) {
+      target.appendChild(panel.root);
+    }
+  }
+  ['fullscreenchange', 'webkitfullscreenchange'].forEach((ev) =>
+    document.addEventListener(ev, relocatePanel)
+  );
 
   // ---------- 启动 ----------
   // 页面里的 video 可能延迟出现，持续探测
