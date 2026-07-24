@@ -4,9 +4,19 @@
   "version": "1.0.0",
   "description": "异地一起看视频：同步 B站/腾讯视频/爱奇艺 的播放、暂停、进度",
   "permissions": ["storage", "tabs"],
+  "icons": {
+    "16": "icon16.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "一起看"
+    "default_title": "一起看",
+    "default_icon": {
+      "16": "icon16.png",
+      "48": "icon48.png",
+      "128": "icon128.png"
+    }
   },
   "content_scripts": [
     {
