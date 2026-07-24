@@ -5,6 +5,13 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.1.1] - 2026-07-24
+
+### 修复
+- **全屏时看不到聊天面板**：进入全屏后浏览器只渲染全屏元素子树，面板被隐藏。现在全屏时把面板移入全屏元素内部，退出时移回
+- **进度条无故回退、播放暂停反复横跳**：回声抑制从"固定时间锁"改为"状态匹配"——seek 缓冲是异步的，事件可能几百毫秒后才触发，旧的时间锁会把被动跳转误判为主动操作发回对方，导致来回弹
+- **点暂停却跳回对方进度**：两人几乎同时操作时，发起方会被对方的旧进度拽走。现在本地刚操作过的 1 秒内，收到对方交叉发来的 play/pause 只同步播放状态、不拉动本地进度
+
 ## [1.1.0] - 2026-07-24
 
 ### 新增
@@ -40,6 +47,7 @@
 - 断线自动重连：网络抖动后每 3 秒重连一次
 - 换集/切清晰度：播放器重建 video 元素时每 2 秒自动重新绑定
 
-[未发布]: https://github.com/Vizards8/watch-together/compare/v1.1.0...HEAD
+[未发布]: https://github.com/Vizards8/watch-together/compare/v1.1.1...HEAD
+[1.1.1]: https://github.com/Vizards8/watch-together/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/Vizards8/watch-together/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/Vizards8/watch-together/releases/tag/v1.0.0
