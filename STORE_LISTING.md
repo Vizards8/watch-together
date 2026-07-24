@@ -54,7 +54,7 @@ cd ~/watch-together/extension && rm -f ../watch-together-store.zip \
 
 【小提示】
 · 付费/会员内容需要各自用有会员的账号登录（插件不共享登录状态）
-· 想让对方快速打开你正在看的视频？面板上点"拉对方过来"，一键把当前页发给 TA
+· 想让对方快速打开你正在看的视频？面板上点"喊 TA 来"，一键把当前页发给 TA
 ```
 
 ## 隐私实践（Privacy practices）——过审关键

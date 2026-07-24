@@ -352,7 +352,7 @@
       'style="font-weight:400;font-size:12px;opacity:.9;margin-left:4px"></span></span>' +
       '<span style="display:flex;gap:10px;align-items:center">' +
       '<span data-act="openurl" title="让对方打开你当前的视频页" ' +
-      'style="cursor:pointer;opacity:.95;font-size:12px">🔗 拉对方过来</span>' +
+      'style="cursor:pointer;opacity:.95;font-size:12px">🔗 喊 TA 来</span>' +
       '<span data-act="toggle" style="cursor:pointer;opacity:.9">—</span>' +
       '</span>';
 
