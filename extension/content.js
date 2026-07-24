@@ -16,10 +16,27 @@
     room: null,
     serverUrl: null,
     connected: false,
-    applyingRemote: false, // 正在作用远端指令，期间本地事件不外发
+    applyingRemote: false, // 硬锁：同步执行的一瞬间，屏蔽即时触发的本地事件
     video: null,
     reconnectTimer: null,
+    // 回声抑制：记录"刚从对方应用了什么状态"。在 until 之前，本地触发的、
+    // 与这个状态一致的事件都视为回声（不是我主动操作），不再发回，避免来回弹。
+    // 只靠时间锁不行——seek 缓冲是异步的，事件可能几百毫秒后才触发。
+    echo: { until: 0, time: 0, paused: null },
   };
+
+  const now = () => Date.now();
+
+  // 判断本地这次事件是不是"由刚收到的远端指令引起的回声"
+  function isEcho(kind, v) {
+    if (state.applyingRemote) return true;       // 正在同步执行，必然是回声
+    if (now() > state.echo.until) return false;  // 窗口外，是真实的本地操作
+    // 窗口内：只有"与刚应用的远端状态一致"才算回声；状态真的变了就放行
+    if (kind === 'play') return state.echo.paused === false;
+    if (kind === 'pause') return state.echo.paused === true;
+    if (kind === 'seek') return Math.abs(v.currentTime - state.echo.time) < 1.0;
+    return false;
+  }
 
   // ---------- 找 video 元素 ----------
   // 三家平台的播放器都是标准 HTML5 <video>，但可能在 iframe 里、可能延迟加载。
@@ -47,16 +64,16 @@
   // ---------- 监听本地视频动作，同步给对方 ----------
   function bindVideoEvents(v) {
     v.addEventListener('play', () => {
-      if (state.applyingRemote) return;
+      if (isEcho('play', v)) return;
       send({ type: 'play', time: v.currentTime });
     });
     v.addEventListener('pause', () => {
-      if (state.applyingRemote) return;
+      if (isEcho('pause', v)) return;
       send({ type: 'pause', time: v.currentTime });
     });
     // seeked：用户拖动进度条后触发。exact=true 表示明确的跳转意图，对方要精确对齐。
     v.addEventListener('seeked', () => {
-      if (state.applyingRemote) return;
+      if (isEcho('seek', v)) return;
       send({ type: 'seek', time: v.currentTime, paused: v.paused, exact: true });
     });
   }
@@ -66,10 +83,17 @@
     const v = ensureVideo();
     if (!v) return;
 
+    // 记录回声窗口：接下来这段时间里，本地触发的、与此状态一致的 play/pause/seeked
+    // 都是"由这次远端指令引起的"，不再发回。窗口给足 1.5 秒，覆盖 seek 缓冲的异步延迟。
+    state.echo.until = now() + 1500;
+    if (typeof msg.time === 'number') state.echo.time = msg.time;
+    if (msg.type === 'play') state.echo.paused = false;
+    else if (msg.type === 'pause') state.echo.paused = true;
+    else if (msg.type === 'seek') state.echo.paused = !!msg.paused;
+
     state.applyingRemote = true;
     try {
-      // 跳转（拖进度条）要精确对齐：阈值放到 0.3 秒，只为避开"跳到几乎同一位置又触发一次"的循环。
-      // 播放/暂停只是顺带带上时间戳做漂移校正，容差保持 0.8 秒，避免频繁微调导致画面抖动。
+      // 跳转（拖进度条）要精确对齐：阈值 0.3 秒。播放/暂停顺带的时间校正容差 0.8 秒。
       const threshold = msg.exact ? 0.3 : 0.8;
       if (typeof msg.time === 'number' && Math.abs(v.currentTime - msg.time) > threshold) {
         v.currentTime = msg.time;
@@ -86,10 +110,11 @@
         addMessage('sys', '对方跳到了 ' + fmtTime(msg.time));
       }
     } finally {
-      // 稍等一拍再解锁，等本地由此触发的 play/pause/seeked 事件走完
+      // 硬锁只保护"同步执行的这一瞬间"里立刻同步触发的事件；
+      // 之后异步触发的（如 seeked）交给 echo 窗口的状态匹配去判断。
       setTimeout(() => {
         state.applyingRemote = false;
-      }, 150);
+      }, 50);
     }
   }
 
