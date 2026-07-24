@@ -27,6 +27,8 @@
     // 这一小段时间里，收到对方几乎同时发来的消息，只同步播放状态、不拉动我的进度，
     // 否则我会被对方的旧进度拽走（"我点暂停却跳回对方进度"的根因）。
     lastLocalActAt: 0,
+    heartbeatTimer: null,   // 心跳定时器：定期广播自己的进度，兜住播放中的持续漂移
+    isBuffering: false,     // 本地是否正在缓冲（卡顿），缓冲时不追赶对方，避免雪上加霜
   };
 
   const now = () => Date.now();
@@ -83,6 +85,10 @@
       state.lastLocalActAt = now();
       send({ type: 'seek', time: v.currentTime, paused: v.paused, exact: true });
     });
+    // 缓冲状态：卡顿时不追赶对方（自己都在 loading，追了也没用还添乱）
+    v.addEventListener('waiting', () => { state.isBuffering = true; });
+    v.addEventListener('playing', () => { state.isBuffering = false; });
+    v.addEventListener('canplay', () => { state.isBuffering = false; });
   }
 
   // ---------- 把远端指令作用到本地视频 ----------
@@ -132,6 +138,52 @@
       setTimeout(() => {
         state.applyingRemote = false;
       }, 50);
+    }
+  }
+
+  // ---------- 心跳对齐 ----------
+  // 播放中没人操作时，两边会因各自的卡顿/缓冲慢慢漂移，且不会自动拉回。
+  // 解决：双方每 4 秒广播一次自己的进度。收到后按"只追赶、不拖慢"的方向温和对齐——
+  // 只有当对方明显比我快（差 >2.5 秒）时我才追上去，收敛方向一致，不会来回拉锯。
+  const HEARTBEAT_MS = 4000;
+  const DRIFT_THRESHOLD = 2.5;
+
+  function startHeartbeat() {
+    stopHeartbeat();
+    state.heartbeatTimer = setInterval(() => {
+      const v = state.video;
+      if (!v || v.paused) return; // 暂停时无需心跳，play/pause 消息已处理对齐
+      send({ type: 'sync', time: v.currentTime, paused: false });
+    }, HEARTBEAT_MS);
+  }
+
+  function stopHeartbeat() {
+    if (state.heartbeatTimer) {
+      clearInterval(state.heartbeatTimer);
+      state.heartbeatTimer = null;
+    }
+  }
+
+  // 收到对方心跳：温和追赶。多重保护避免误跳和拉锯。
+  function applyHeartbeat(msg) {
+    const v = state.video;
+    if (!v || typeof msg.time !== 'number') return;
+    if (v.paused || msg.paused) return;              // 有一方暂停就不管，交给 play/pause 逻辑
+    if (state.isBuffering) return;                   // 自己在缓冲，别乱跳
+    if (now() - state.lastLocalActAt < 1500) return; // 刚操作过，别打架
+    if (now() < state.echo.until) return;            // 回声窗口内，别打架
+
+    const diff = msg.time - v.currentTime;
+    // 只在"对方比我快 >2.5 秒"时追上去。对方比我慢则不动（等对方的心跳去追我），
+    // 保证两边都朝"较快的一方"收敛，方向一致，不会互相拽。
+    if (diff > DRIFT_THRESHOLD) {
+      state.echo.until = now() + 1500;
+      state.echo.time = msg.time;
+      state.echo.paused = false;
+      state.applyingRemote = true;
+      v.currentTime = msg.time;
+      setTimeout(() => { state.applyingRemote = false; }, 50);
+      addMessage('sys', '⏱ 已自动对齐进度（网络波动）');
     }
   }
 
@@ -194,6 +246,7 @@
       log('已连接到中转服务');
       buildPanel();
       addMessage('sys', '已连接，等待对方加入…');
+      startHeartbeat();
       notifyPopup();
     };
 
@@ -220,11 +273,16 @@
         handleOpenUrl(msg.url);
         return;
       }
+      if (msg.type === 'sync') {
+        applyHeartbeat(msg);
+        return;
+      }
       applyRemote(msg);
     };
 
     ws.onclose = () => {
       state.connected = false;
+      stopHeartbeat();
       notifyPopup();
       scheduleReconnect();
     };
@@ -250,6 +308,7 @@
 
   function disconnect() {
     state.manualLeave = true;
+    stopHeartbeat();
     if (state.ws) {
       try { state.ws.close(); } catch {}
       state.ws = null;
@@ -287,7 +346,8 @@
       'display:flex;align-items:center;justify-content:space-between;' +
       'padding:8px 12px;background:#fb7299;cursor:move;font-weight:600;';
     bar.innerHTML =
-      '<span>💬 一起看</span>' +
+      '<span>💬 一起看 <span data-role="clock" ' +
+      'style="font-weight:400;font-size:12px;opacity:.9;margin-left:4px"></span></span>' +
       '<span style="display:flex;gap:10px;align-items:center">' +
       '<span data-act="openurl" title="让对方打开你当前的视频页" ' +
       'style="cursor:pointer;opacity:.95;font-size:12px">🔗 拉对方过来</span>' +
@@ -356,6 +416,12 @@
 
     enableDrag(root, bar);
 
+    // 标题栏时钟：立即显示一次，之后每 15 秒刷新（跨过整分钟即更新）
+    const clockEl = bar.querySelector('[data-role="clock"]');
+    const tick = () => { if (clockEl) clockEl.textContent = clockHM(); };
+    tick();
+    setInterval(tick, 15000);
+
     // 若当前正处于全屏，面板要挂到全屏元素里才可见
     relocatePanel();
   }
@@ -415,10 +481,17 @@
   }
 
   // 追加一条消息。who: 'me' | 'peer' | 'sys'
+  let lastSysText = '', lastSysAt = 0;
   function addMessage(who, text) {
     buildPanel();
     const isMe = who === 'me';
     const isSys = who === 'sys';
+    // 系统提示限流：同一条提示 8 秒内不重复显示，避免"自动对齐"等高频提示刷屏
+    if (isSys) {
+      if (text === lastSysText && now() - lastSysAt < 8000) return;
+      lastSysText = text;
+      lastSysAt = now();
+    }
     // 只有聊天消息（自己/对方发言）才自动展开面板提醒；系统提示（播放/暂停/跳转等
     // 高频操作）不打扰你，静默记录，展开时仍能在历史里看到。
     if (!isSys && panel.collapsed) togglePanel();
@@ -427,15 +500,34 @@
       row.style.cssText = 'align-self:center;color:#aaa;font-size:11px;';
       row.textContent = text;
     } else {
+      // 聊天气泡 + 下方小字时间戳
       row.style.cssText =
-        'max-width:80%;padding:6px 10px;border-radius:10px;word-break:break-word;' +
+        'display:flex;flex-direction:column;max-width:80%;' +
+        (isMe ? 'align-self:flex-end;align-items:flex-end;'
+              : 'align-self:flex-start;align-items:flex-start;');
+      const bubble = document.createElement('div');
+      bubble.style.cssText =
+        'padding:6px 10px;border-radius:10px;word-break:break-word;' +
         (isMe
-          ? 'align-self:flex-end;background:#fb7299;color:#fff;'
-          : 'align-self:flex-start;background:rgba(255,255,255,.15);color:#fff;');
-      row.textContent = text;
+          ? 'background:#fb7299;color:#fff;'
+          : 'background:rgba(255,255,255,.15);color:#fff;');
+      bubble.textContent = text;
+      const ts = document.createElement('div');
+      ts.style.cssText = 'font-size:10px;color:#999;margin-top:2px;padding:0 2px;';
+      ts.textContent = clockHM();
+      row.appendChild(bubble);
+      row.appendChild(ts);
     }
     panel.body.appendChild(row);
     panel.body.scrollTop = panel.body.scrollHeight;
+  }
+
+  // 当前时钟 HH:MM
+  function clockHM() {
+    const d = new Date();
+    const h = d.getHours();
+    const m = d.getMinutes();
+    return `${h < 10 ? '0' : ''}${h}:${m < 10 ? '0' : ''}${m}`;
   }
 
   // ---------- 和 popup 通信 ----------
