@@ -94,6 +94,7 @@
     if (!state.serverUrl || !state.room) return;
     if (state.ws && (state.ws.readyState === 0 || state.ws.readyState === 1)) return;
 
+    state.manualLeave = false;
     const url =
       `${state.serverUrl}?room=${encodeURIComponent(state.room)}` +
       `&pass=${encodeURIComponent(state.pass || '')}`;
@@ -112,6 +113,8 @@
     ws.onopen = () => {
       state.connected = true;
       log('已连接到中转服务');
+      buildPanel();
+      addMessage('sys', '已连接，等待对方加入…');
       notifyPopup();
     };
 
@@ -123,12 +126,15 @@
         return;
       }
       if (msg.type === 'presence') {
+        const prev = state.peerCount || 0;
         state.peerCount = msg.count;
+        if (msg.count >= 2 && prev < 2) addMessage('sys', '对方已加入 💕');
+        else if (msg.count < 2 && prev >= 2) addMessage('sys', '对方离开了');
         notifyPopup();
         return;
       }
       if (msg.type === 'chat') {
-        showToast(msg.text);
+        addMessage('peer', msg.text);
         return;
       }
       applyRemote(msg);
@@ -160,6 +166,7 @@
   }
 
   function disconnect() {
+    state.manualLeave = true;
     if (state.ws) {
       try { state.ws.close(); } catch {}
       state.ws = null;
@@ -167,27 +174,171 @@
     state.connected = false;
     clearTimeout(state.reconnectTimer);
     state.reconnectTimer = null;
+    // 主动离开时移除面板
+    if (panel.root) {
+      panel.root.remove();
+      panel.root = null;
+    }
   }
 
 
-  // ---------- 轻量提示条（收到聊天/状态时闪一下） ----------
-  let toastEl = null;
-  function showToast(text) {
-    if (!toastEl) {
-      toastEl = document.createElement('div');
-      toastEl.style.cssText =
-        'position:fixed;left:50%;top:12%;transform:translateX(-50%);' +
-        'background:rgba(0,0,0,.8);color:#fff;padding:10px 18px;border-radius:8px;' +
-        'font-size:15px;z-index:2147483647;pointer-events:none;max-width:70%;' +
-        'transition:opacity .3s;font-family:sans-serif;';
-      document.documentElement.appendChild(toastEl);
+  // ---------- 可拖动聊天面板 ----------
+  // 停在角落，显示历史对话，可拖到任意位置（位置记忆），可收起。
+  // 面板自带输入框，直接在页面上就能发消息，不必每次开插件弹窗。
+  const panel = { root: null, body: null, input: null, collapsed: false };
+
+  function buildPanel() {
+    if (panel.root) return;
+
+    const root = document.createElement('div');
+    root.style.cssText =
+      'position:fixed;z-index:2147483647;width:260px;' +
+      'background:rgba(28,28,30,.92);color:#fff;border-radius:12px;' +
+      'font-family:-apple-system,"PingFang SC",sans-serif;font-size:13px;' +
+      'box-shadow:0 6px 24px rgba(0,0,0,.4);overflow:hidden;' +
+      'backdrop-filter:blur(6px);user-select:none;';
+
+    // 标题栏（可拖动）
+    const bar = document.createElement('div');
+    bar.style.cssText =
+      'display:flex;align-items:center;justify-content:space-between;' +
+      'padding:8px 12px;background:#fb7299;cursor:move;font-weight:600;';
+    bar.innerHTML =
+      '<span>💬 一起看</span>' +
+      '<span style="display:flex;gap:8px">' +
+      '<span data-act="toggle" style="cursor:pointer;opacity:.9">—</span>' +
+      '</span>';
+
+    // 消息区
+    const body = document.createElement('div');
+    body.style.cssText =
+      'max-height:240px;min-height:60px;overflow-y:auto;padding:10px 12px;' +
+      'display:flex;flex-direction:column;gap:6px;';
+
+    // 输入区
+    const foot = document.createElement('div');
+    foot.style.cssText = 'display:flex;gap:6px;padding:8px;background:rgba(255,255,255,.06);';
+    const input = document.createElement('input');
+    input.placeholder = '说点什么…';
+    input.style.cssText =
+      'flex:1;border:none;border-radius:6px;padding:7px 9px;font-size:13px;' +
+      'background:rgba(255,255,255,.12);color:#fff;outline:none;';
+    input.setAttribute('placeholder', '说点什么…');
+    const sendBtn = document.createElement('button');
+    sendBtn.textContent = '发送';
+    sendBtn.style.cssText =
+      'border:none;border-radius:6px;padding:0 12px;background:#fb7299;' +
+      'color:#fff;font-size:13px;cursor:pointer;';
+
+    foot.appendChild(input);
+    foot.appendChild(sendBtn);
+    root.appendChild(bar);
+    root.appendChild(body);
+    root.appendChild(foot);
+    document.documentElement.appendChild(root);
+
+    panel.root = root;
+    panel.body = body;
+    panel.input = input;
+    panel.foot = foot;
+
+    // 恢复上次位置，默认右下角
+    const pos = loadPanelPos();
+    root.style.left = pos.left;
+    root.style.top = pos.top;
+
+    // 输入时阻止按键冒泡到播放器（否则空格会暂停视频、方向键会快进）
+    ['keydown', 'keyup', 'keypress'].forEach((ev) =>
+      input.addEventListener(ev, (e) => e.stopPropagation())
+    );
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') submitChat();
+    });
+    sendBtn.addEventListener('click', submitChat);
+
+    // 收起/展开
+    bar.querySelector('[data-act="toggle"]').addEventListener('click', (e) => {
+      e.stopPropagation();
+      togglePanel();
+    });
+
+    enableDrag(root, bar);
+  }
+
+  function submitChat() {
+    const text = panel.input.value.trim();
+    if (!text) return;
+    send({ type: 'chat', text });
+    addMessage('me', text);
+    panel.input.value = '';
+  }
+
+  function togglePanel() {
+    panel.collapsed = !panel.collapsed;
+    panel.body.style.display = panel.collapsed ? 'none' : 'flex';
+    panel.foot.style.display = panel.collapsed ? 'none' : 'flex';
+  }
+
+  // 拖动：按住标题栏移动整个面板，松手记忆位置
+  function enableDrag(root, handle) {
+    let sx, sy, ox, oy, dragging = false;
+    handle.addEventListener('mousedown', (e) => {
+      dragging = true;
+      sx = e.clientX; sy = e.clientY;
+      const r = root.getBoundingClientRect();
+      ox = r.left; oy = r.top;
+      e.preventDefault();
+    });
+    document.addEventListener('mousemove', (e) => {
+      if (!dragging) return;
+      let nl = ox + (e.clientX - sx);
+      let nt = oy + (e.clientY - sy);
+      // 限制在视口内
+      nl = Math.max(0, Math.min(nl, window.innerWidth - root.offsetWidth));
+      nt = Math.max(0, Math.min(nt, window.innerHeight - root.offsetHeight));
+      root.style.left = nl + 'px';
+      root.style.top = nt + 'px';
+    });
+    document.addEventListener('mouseup', () => {
+      if (!dragging) return;
+      dragging = false;
+      savePanelPos(root.style.left, root.style.top);
+    });
+  }
+
+  function loadPanelPos() {
+    try {
+      const raw = localStorage.getItem('watchTogetherPanelPos');
+      if (raw) return JSON.parse(raw);
+    } catch {}
+    return { left: window.innerWidth - 280 + 'px', top: window.innerHeight - 360 + 'px' };
+  }
+  function savePanelPos(left, top) {
+    try {
+      localStorage.setItem('watchTogetherPanelPos', JSON.stringify({ left, top }));
+    } catch {}
+  }
+
+  // 追加一条消息。who: 'me' | 'peer' | 'sys'
+  function addMessage(who, text) {
+    buildPanel();
+    if (panel.collapsed) togglePanel(); // 有新消息自动展开
+    const row = document.createElement('div');
+    const isMe = who === 'me';
+    const isSys = who === 'sys';
+    if (isSys) {
+      row.style.cssText = 'align-self:center;color:#aaa;font-size:11px;';
+      row.textContent = text;
+    } else {
+      row.style.cssText =
+        'max-width:80%;padding:6px 10px;border-radius:10px;word-break:break-word;' +
+        (isMe
+          ? 'align-self:flex-end;background:#fb7299;color:#fff;'
+          : 'align-self:flex-start;background:rgba(255,255,255,.15);color:#fff;');
+      row.textContent = text;
     }
-    toastEl.textContent = text;
-    toastEl.style.opacity = '1';
-    clearTimeout(toastEl._t);
-    toastEl._t = setTimeout(() => {
-      if (toastEl) toastEl.style.opacity = '0';
-    }, 3000);
+    panel.body.appendChild(row);
+    panel.body.scrollTop = panel.body.scrollHeight;
   }
 
   // ---------- 和 popup 通信 ----------
@@ -221,7 +372,7 @@
       });
     } else if (req.type === 'chat') {
       send({ type: 'chat', text: req.text });
-      showToast('我：' + req.text);
+      addMessage('me', req.text);
       sendResponse({ ok: true });
     }
     return true; // 异步 sendResponse
