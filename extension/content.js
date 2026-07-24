@@ -23,6 +23,10 @@
     // 与这个状态一致的事件都视为回声（不是我主动操作），不再发回，避免来回弹。
     // 只靠时间锁不行——seek 缓冲是异步的，事件可能几百毫秒后才触发。
     echo: { until: 0, time: 0, paused: null },
+    // "我刚主动操作过"的时间戳。用于消息交叉时保护发起方：我刚按下暂停/播放/拖动的
+    // 这一小段时间里，收到对方几乎同时发来的消息，只同步播放状态、不拉动我的进度，
+    // 否则我会被对方的旧进度拽走（"我点暂停却跳回对方进度"的根因）。
+    lastLocalActAt: 0,
   };
 
   const now = () => Date.now();
@@ -65,15 +69,18 @@
   function bindVideoEvents(v) {
     v.addEventListener('play', () => {
       if (isEcho('play', v)) return;
+      state.lastLocalActAt = now();
       send({ type: 'play', time: v.currentTime });
     });
     v.addEventListener('pause', () => {
       if (isEcho('pause', v)) return;
+      state.lastLocalActAt = now();
       send({ type: 'pause', time: v.currentTime });
     });
     // seeked：用户拖动进度条后触发。exact=true 表示明确的跳转意图，对方要精确对齐。
     v.addEventListener('seeked', () => {
       if (isEcho('seek', v)) return;
+      state.lastLocalActAt = now();
       send({ type: 'seek', time: v.currentTime, paused: v.paused, exact: true });
     });
   }
@@ -93,9 +100,19 @@
 
     state.applyingRemote = true;
     try {
+      // 消息交叉保护：我自己刚（1 秒内）主动操作过，说明这条对方的消息是几乎同时发出、
+      // 与我的操作交叉的。这种情况下不能用对方的旧进度拉动我——否则"我点暂停却跳回对方
+      // 进度"。只有拖进度条(exact)是明确的跳转意图，仍然对齐；play/pause 不动我的进度。
+      const justActedLocally = now() - state.lastLocalActAt < 1000;
+      const allowSeek = msg.exact || !justActedLocally;
+
       // 跳转（拖进度条）要精确对齐：阈值 0.3 秒。播放/暂停顺带的时间校正容差 0.8 秒。
       const threshold = msg.exact ? 0.3 : 0.8;
-      if (typeof msg.time === 'number' && Math.abs(v.currentTime - msg.time) > threshold) {
+      if (
+        allowSeek &&
+        typeof msg.time === 'number' &&
+        Math.abs(v.currentTime - msg.time) > threshold
+      ) {
         v.currentTime = msg.time;
       }
       if (msg.type === 'play') {
