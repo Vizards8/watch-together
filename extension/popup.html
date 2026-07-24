@@ -52,9 +52,6 @@
 <body>
   <h1>一起看 🎬</h1>
 
-  <label>中转服务地址</label>
-  <input id="serverUrl" placeholder="wss://xxx.up.railway.app" />
-
   <label>房间号（和对方约定一致）</label>
   <input id="room" placeholder="例如 我俩的小屋" />
 
@@ -62,6 +59,12 @@
   <input id="pass" type="password" placeholder="留空则无密码" />
 
   <button id="joinBtn">加入房间</button>
+
+  <details style="margin-top:10px">
+    <summary style="cursor:pointer;color:#999;font-size:12px">高级设置</summary>
+    <label>中转服务地址（留空用默认）</label>
+    <input id="serverUrl" placeholder="wss://xxx.up.railway.app" />
+  </details>
   <button id="leaveBtn" class="leave" style="display:none">离开</button>
 
   <div class="status">

@@ -327,7 +327,9 @@
   // ---------- 可拖动聊天面板 ----------
   // 停在角落，显示历史对话，可拖到任意位置（位置记忆），可收起。
   // 面板自带输入框，直接在页面上就能发消息，不必每次开插件弹窗。
-  const panel = { root: null, body: null, input: null, collapsed: false };
+  // collapsed=true 时只显示边缘小圆标（bubble），完整面板（root）隐藏，不挡画面。
+  // 点小圆标展开，点面板「—」收回小圆标。默认收起。
+  const panel = { root: null, body: null, input: null, bubble: null, collapsed: true, unread: 0 };
 
   function buildPanel() {
     if (panel.root) return;
@@ -422,6 +424,31 @@
     tick();
     setInterval(tick, 15000);
 
+    // 边缘小圆标：平时只露这个，不挡画面。点它展开完整面板。
+    const bubble = document.createElement('div');
+    bubble.style.cssText =
+      'position:fixed;z-index:2147483647;width:44px;height:44px;border-radius:50%;' +
+      'background:#fb7299;color:#fff;display:flex;align-items:center;justify-content:center;' +
+      'font-size:20px;cursor:pointer;box-shadow:0 3px 12px rgba(0,0,0,.35);' +
+      'user-select:none;transition:transform .15s;';
+    bubble.innerHTML =
+      '💬<span data-role="badge" style="position:absolute;top:-3px;right:-3px;' +
+      'min-width:16px;height:16px;line-height:16px;padding:0 4px;border-radius:8px;' +
+      'background:#ff3b30;color:#fff;font-size:11px;text-align:center;display:none"></span>';
+    bubble.title = '一起看 · 点击展开';
+    // 小圆标默认停右下角
+    const bpos = loadBubblePos();
+    bubble.style.left = bpos.left;
+    bubble.style.top = bpos.top;
+    document.documentElement.appendChild(bubble);
+    panel.bubble = bubble;
+
+    bubble.addEventListener('click', () => setCollapsed(false));
+    enableBubbleDrag(bubble);
+
+    // 默认收起为小圆标
+    setCollapsed(true);
+
     // 若当前正处于全屏，面板要挂到全屏元素里才可见
     relocatePanel();
   }
@@ -435,9 +462,69 @@
   }
 
   function togglePanel() {
-    panel.collapsed = !panel.collapsed;
-    panel.body.style.display = panel.collapsed ? 'none' : 'flex';
-    panel.foot.style.display = panel.collapsed ? 'none' : 'flex';
+    setCollapsed(!panel.collapsed);
+  }
+
+  // 收起：隐藏完整面板，显示小圆标。展开：反之，并清空未读。
+  function setCollapsed(collapsed) {
+    panel.collapsed = collapsed;
+    if (!panel.root) return;
+    panel.root.style.display = collapsed ? 'none' : 'block';
+    if (panel.bubble) panel.bubble.style.display = collapsed ? 'flex' : 'none';
+    if (!collapsed) {
+      panel.unread = 0;
+      updateBadge();
+      panel.body.scrollTop = panel.body.scrollHeight;
+    }
+    relocatePanel();
+  }
+
+  // 小圆标上的未读红点
+  function updateBadge() {
+    if (!panel.bubble) return;
+    const badge = panel.bubble.querySelector('[data-role="badge"]');
+    if (!badge) return;
+    if (panel.unread > 0) {
+      badge.textContent = panel.unread > 99 ? '99+' : String(panel.unread);
+      badge.style.display = 'block';
+      // 轻微弹动提醒
+      panel.bubble.style.transform = 'scale(1.15)';
+      setTimeout(() => { if (panel.bubble) panel.bubble.style.transform = 'scale(1)'; }, 150);
+    } else {
+      badge.style.display = 'none';
+    }
+  }
+
+  // 小圆标也可拖动（与面板独立记忆位置）
+  function enableBubbleDrag(el) {
+    let sx, sy, ox, oy, moved = false, dragging = false;
+    el.addEventListener('mousedown', (e) => {
+      dragging = true; moved = false;
+      sx = e.clientX; sy = e.clientY;
+      const r = el.getBoundingClientRect();
+      ox = r.left; oy = r.top;
+      e.preventDefault();
+    });
+    document.addEventListener('mousemove', (e) => {
+      if (!dragging) return;
+      if (Math.abs(e.clientX - sx) > 3 || Math.abs(e.clientY - sy) > 3) moved = true;
+      let nl = ox + (e.clientX - sx);
+      let nt = oy + (e.clientY - sy);
+      nl = Math.max(0, Math.min(nl, window.innerWidth - el.offsetWidth));
+      nt = Math.max(0, Math.min(nt, window.innerHeight - el.offsetHeight));
+      el.style.left = nl + 'px';
+      el.style.top = nt + 'px';
+    });
+    document.addEventListener('mouseup', () => {
+      if (!dragging) return;
+      dragging = false;
+      if (moved) {
+        // 拖动过就记住位置，并阻止这次的 click 展开
+        saveBubblePos(el.style.left, el.style.top);
+        const block = (ev) => { ev.stopPropagation(); el.removeEventListener('click', block, true); };
+        el.addEventListener('click', block, true);
+      }
+    });
   }
 
   // 拖动：按住标题栏移动整个面板，松手记忆位置
@@ -479,6 +566,18 @@
       localStorage.setItem('watchTogetherPanelPos', JSON.stringify({ left, top }));
     } catch {}
   }
+  function loadBubblePos() {
+    try {
+      const raw = localStorage.getItem('watchTogetherBubblePos');
+      if (raw) return JSON.parse(raw);
+    } catch {}
+    return { left: window.innerWidth - 64 + 'px', top: window.innerHeight - 84 + 'px' };
+  }
+  function saveBubblePos(left, top) {
+    try {
+      localStorage.setItem('watchTogetherBubblePos', JSON.stringify({ left, top }));
+    } catch {}
+  }
 
   // 追加一条消息。who: 'me' | 'peer' | 'sys'
   let lastSysText = '', lastSysAt = 0;
@@ -492,9 +591,12 @@
       lastSysText = text;
       lastSysAt = now();
     }
-    // 只有聊天消息（自己/对方发言）才自动展开面板提醒；系统提示（播放/暂停/跳转等
-    // 高频操作）不打扰你，静默记录，展开时仍能在历史里看到。
-    if (!isSys && panel.collapsed) togglePanel();
+    // 收起（小圆标）状态下：对方发来的聊天消息累计未读、让圆标红点提醒，但不强行展开
+    // 打断看视频。自己发的、系统提示都不计未读。展开时未读清零。
+    if (panel.collapsed && who === 'peer') {
+      panel.unread++;
+      updateBadge();
+    }
     const row = document.createElement('div');
     if (isSys) {
       row.style.cssText = 'align-self:center;color:#aaa;font-size:11px;';
@@ -572,13 +674,12 @@
   // 所以全屏时把面板移进全屏元素内部，退出时移回来。面板是 position:fixed，
   // 仍以视口定位，移动后位置不受影响。
   function relocatePanel() {
-    if (!panel.root) return;
     const fsEl =
       document.fullscreenElement || document.webkitFullscreenElement || null;
     const target = fsEl || document.documentElement;
-    if (panel.root.parentNode !== target) {
-      target.appendChild(panel.root);
-    }
+    // 面板和小圆标都要跟着挪进全屏元素，否则全屏时不可见
+    if (panel.root && panel.root.parentNode !== target) target.appendChild(panel.root);
+    if (panel.bubble && panel.bubble.parentNode !== target) target.appendChild(panel.bubble);
   }
   ['fullscreenchange', 'webkitfullscreenchange'].forEach((ev) =>
     document.addEventListener(ev, relocatePanel)

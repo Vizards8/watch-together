@@ -4,3 +4,11 @@ node_modules/
 .env
 .venv/
 make_icon.py
+
+# 扩展签名私钥，绝不提交
+*.pem
+watch-together-signing-key.pem
+# crx 本地分发包，不入库
+*.crx
+# 构建产物
+watch-together-store.zip

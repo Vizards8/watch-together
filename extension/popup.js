@@ -1,5 +1,9 @@
 // popup 逻辑：读写配置、向当前标签页的内容脚本发指令、显示连接状态
 
+// 内嵌的默认中转服务地址。部署好后填这里，用户就不用手填了。
+// 想临时换服务器：在 popup 的「高级设置」里填，会覆盖这个默认值。
+const DEFAULT_SERVER_URL = 'wss://watch-together-production-d1c9.up.railway.app';
+
 const $ = (id) => document.getElementById(id);
 
 async function activeTab() {
@@ -38,7 +42,8 @@ function render(status) {
 // 初始化：回填配置 + 查询当前状态
 (async () => {
   const cfg = await chrome.storage.local.get(['serverUrl', 'room', 'pass']);
-  if (cfg.serverUrl) $('serverUrl').value = cfg.serverUrl;
+  // 高级设置里只在用户曾自定义过（与默认不同）时回填，否则留空走默认
+  if (cfg.serverUrl && cfg.serverUrl !== DEFAULT_SERVER_URL) $('serverUrl').value = cfg.serverUrl;
   if (cfg.room) $('room').value = cfg.room;
   if (cfg.pass) $('pass').value = cfg.pass;
   const status = await sendToContent({ type: 'getStatus' });
@@ -46,11 +51,16 @@ function render(status) {
 })();
 
 $('joinBtn').addEventListener('click', async () => {
-  const serverUrl = $('serverUrl').value.trim();
+  // 地址：优先用高级设置里填的，没填就用内嵌默认
+  const serverUrl = $('serverUrl').value.trim() || DEFAULT_SERVER_URL;
   const room = $('room').value.trim();
   const pass = $('pass').value;
-  if (!serverUrl || !room) {
-    alert('请填写服务地址和房间号');
+  if (!room) {
+    alert('请填写房间号');
+    return;
+  }
+  if (!serverUrl || serverUrl.startsWith('__REPLACE')) {
+    alert('还没配置中转服务地址，请在高级设置里填写');
     return;
   }
   await chrome.storage.local.set({ serverUrl, room, pass, autoJoin: true });
