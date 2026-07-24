@@ -417,10 +417,12 @@
   // 追加一条消息。who: 'me' | 'peer' | 'sys'
   function addMessage(who, text) {
     buildPanel();
-    if (panel.collapsed) togglePanel(); // 有新消息自动展开
-    const row = document.createElement('div');
     const isMe = who === 'me';
     const isSys = who === 'sys';
+    // 只有聊天消息（自己/对方发言）才自动展开面板提醒；系统提示（播放/暂停/跳转等
+    // 高频操作）不打扰你，静默记录，展开时仍能在历史里看到。
+    if (!isSys && panel.collapsed) togglePanel();
+    const row = document.createElement('div');
     if (isSys) {
       row.style.cssText = 'align-self:center;color:#aaa;font-size:11px;';
       row.textContent = text;
