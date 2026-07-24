@@ -5,6 +5,21 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.2.0] - 2026-07-25
+
+### 新增
+- **时间展示**：面板标题栏显示实时时钟，每条聊天消息带发送时间戳，避免不知不觉看太晚
+- **心跳对齐**：播放中双方每 4 秒同步一次进度，网络波动/缓冲导致的持续漂移会自动收敛（只向较快一方追赶，不来回拉锯）
+- **内嵌服务地址**：中转服务地址已内置，加入房间时只需填房间号和密码；如需更换服务器可在「高级设置」里填
+
+### 变更
+- **聊天面板改为边缘小圆标**：平时只在屏幕角落显示一个小圆标，不遮挡画面；点击展开完整面板，收到对方消息时圆标显示未读红点并轻微弹动，不再强行弹出打断观看；小圆标可拖动、位置记忆、全屏下可用
+- 播放/暂停等系统提示不再自动展开面板（只有聊天消息才提醒）
+- 系统提示限流：同一条提示 8 秒内不重复，避免刷屏
+
+### 移除
+- 去掉未使用的 `tabs` 权限（代码只需当前活动标签页通信，无需该敏感权限），减少安装时的权限提示
+
 ## [1.1.1] - 2026-07-24
 
 ### 修复
@@ -47,7 +62,8 @@
 - 断线自动重连：网络抖动后每 3 秒重连一次
 - 换集/切清晰度：播放器重建 video 元素时每 2 秒自动重新绑定
 
-[未发布]: https://github.com/Vizards8/watch-together/compare/v1.1.1...HEAD
+[未发布]: https://github.com/Vizards8/watch-together/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/Vizards8/watch-together/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/Vizards8/watch-together/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/Vizards8/watch-together/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/Vizards8/watch-together/releases/tag/v1.0.0
