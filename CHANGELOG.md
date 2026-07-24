@@ -5,7 +5,7 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [未发布]
+## [1.1.0] - 2026-07-24
 
 ### 新增
 - **拉对方过来**：面板标题栏新增「🔗 拉对方过来」，一键把你当前的视频页发给对方，对方浏览器自动跳转到同一页并自动重连，继续同步
@@ -40,5 +40,6 @@
 - 断线自动重连：网络抖动后每 3 秒重连一次
 - 换集/切清晰度：播放器重建 video 元素时每 2 秒自动重新绑定
 
-[未发布]: https://github.com/Vizards8/watch-together/compare/v1.0.0...HEAD
+[未发布]: https://github.com/Vizards8/watch-together/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/Vizards8/watch-together/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/Vizards8/watch-together/releases/tag/v1.0.0
