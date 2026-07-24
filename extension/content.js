@@ -54,10 +54,10 @@
       if (state.applyingRemote) return;
       send({ type: 'pause', time: v.currentTime });
     });
-    // seeked：用户拖动进度条后触发
+    // seeked：用户拖动进度条后触发。exact=true 表示明确的跳转意图，对方要精确对齐。
     v.addEventListener('seeked', () => {
       if (state.applyingRemote) return;
-      send({ type: 'seek', time: v.currentTime, paused: v.paused });
+      send({ type: 'seek', time: v.currentTime, paused: v.paused, exact: true });
     });
   }
 
@@ -68,17 +68,22 @@
 
     state.applyingRemote = true;
     try {
-      // 进度差超过 0.8 秒才对齐，避免频繁微调导致画面抖动
-      if (typeof msg.time === 'number' && Math.abs(v.currentTime - msg.time) > 0.8) {
+      // 跳转（拖进度条）要精确对齐：阈值放到 0.3 秒，只为避开"跳到几乎同一位置又触发一次"的循环。
+      // 播放/暂停只是顺带带上时间戳做漂移校正，容差保持 0.8 秒，避免频繁微调导致画面抖动。
+      const threshold = msg.exact ? 0.3 : 0.8;
+      if (typeof msg.time === 'number' && Math.abs(v.currentTime - msg.time) > threshold) {
         v.currentTime = msg.time;
       }
       if (msg.type === 'play') {
         v.play().catch(() => {});
+        addMessage('sys', '对方点了播放 ▶');
       } else if (msg.type === 'pause') {
         v.pause();
+        addMessage('sys', '对方按了暂停 ⏸');
       } else if (msg.type === 'seek') {
         if (msg.paused) v.pause();
         else v.play().catch(() => {});
+        addMessage('sys', '对方跳到了 ' + fmtTime(msg.time));
       }
     } finally {
       // 稍等一拍再解锁，等本地由此触发的 play/pause/seeked 事件走完
@@ -86,6 +91,38 @@
         state.applyingRemote = false;
       }, 150);
     }
+  }
+
+  // 秒数转 mm:ss
+  function fmtTime(sec) {
+    if (typeof sec !== 'number' || isNaN(sec)) return '';
+    const m = Math.floor(sec / 60);
+    const s = Math.floor(sec % 60);
+    return `${m}:${s < 10 ? '0' : ''}${s}`;
+  }
+
+  // 收到对方发来的"打开这个页面"。已在同一页则忽略；否则跳转前保存好房间配置，
+  // 让跳转后的新页面能靠 autoJoin 自动重连，聊天面板和同步会自动恢复。
+  function handleOpenUrl(url) {
+    if (!url) return;
+    // 归一化对比：忽略 hash 等细枝末节
+    const strip = (u) => u.split('#')[0];
+    if (strip(url) === strip(location.href)) {
+      addMessage('sys', '对方想一起看这页，你已经在这了');
+      return;
+    }
+    buildPanel();
+    addMessage('sys', '对方邀请你打开新页面，即将跳转…');
+    // 确保当前房间配置已持久化（跳转后新页面自动重连需要）
+    chrome.storage?.local?.set?.({
+      serverUrl: state.serverUrl,
+      room: state.room,
+      pass: state.pass || '',
+      autoJoin: true,
+    });
+    setTimeout(() => {
+      location.href = url;
+    }, 800);
   }
 
 
@@ -135,6 +172,10 @@
       }
       if (msg.type === 'chat') {
         addMessage('peer', msg.text);
+        return;
+      }
+      if (msg.type === 'openurl') {
+        handleOpenUrl(msg.url);
         return;
       }
       applyRemote(msg);
@@ -205,7 +246,9 @@
       'padding:8px 12px;background:#fb7299;cursor:move;font-weight:600;';
     bar.innerHTML =
       '<span>💬 一起看</span>' +
-      '<span style="display:flex;gap:8px">' +
+      '<span style="display:flex;gap:10px;align-items:center">' +
+      '<span data-act="openurl" title="让对方打开你当前的视频页" ' +
+      'style="cursor:pointer;opacity:.95;font-size:12px">🔗 拉对方过来</span>' +
       '<span data-act="toggle" style="cursor:pointer;opacity:.9">—</span>' +
       '</span>';
 
@@ -260,6 +303,13 @@
     bar.querySelector('[data-act="toggle"]').addEventListener('click', (e) => {
       e.stopPropagation();
       togglePanel();
+    });
+
+    // 拉对方过来：把当前页 URL 发给对方，让 TA 的浏览器跳到同一页
+    bar.querySelector('[data-act="openurl"]').addEventListener('click', (e) => {
+      e.stopPropagation();
+      send({ type: 'openurl', url: location.href });
+      addMessage('sys', '已把当前页发给对方');
     });
 
     enableDrag(root, bar);
