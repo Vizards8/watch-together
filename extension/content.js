@@ -294,7 +294,8 @@
       state.connected = false;
       stopHeartbeat();
       notifyPopup();
-      scheduleReconnect();
+      // 主动离开（点了"离开"）不重连；只有意外断线才重连
+      if (!state.manualLeave) scheduleReconnect();
     };
 
     ws.onerror = () => {
@@ -304,8 +305,10 @@
 
   function scheduleReconnect() {
     if (state.reconnectTimer) return;
+    if (state.manualLeave) return; // 主动离开后不重连
     state.reconnectTimer = setTimeout(() => {
       state.reconnectTimer = null;
+      if (state.manualLeave) return; // 定时器触发时再确认一次
       connect();
     }, 3000);
   }
@@ -674,6 +677,8 @@
       connect();
       sendResponse({ ok: true });
     } else if (req.type === 'leave') {
+      // 清掉自动重连标志，避免刷新/重开页面后又自动加回房间
+      chrome.storage?.local?.set?.({ autoJoin: false });
       disconnect();
       notifyPopup();
       sendResponse({ ok: true });
