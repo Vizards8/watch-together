@@ -61,9 +61,23 @@
   function ensureVideo() {
     const v = findVideo();
     if (v && v !== state.video) {
+      // 换绑到新的 video 时，先把旧的那个暂停，避免两个 video 同时出声导致回声。
+      const old = state.video;
+      if (old && old !== v && !old.paused) {
+        try { old.pause(); } catch {}
+      }
       state.video = v;
       bindVideoEvents(v);
       log('已绑定视频元素');
+    }
+    // 巡查：只允许当前选中的正片出声。首次进房间时页面常有多个 video 同时在放同一内容，
+    // 造成"同一视频放两遍"的回声。把除正片外、其他还在播放的 video 全部暂停。
+    if (state.video) {
+      for (const other of document.querySelectorAll('video')) {
+        if (other !== state.video && !other.paused) {
+          try { other.pause(); } catch {}
+        }
+      }
     }
     return state.video;
   }

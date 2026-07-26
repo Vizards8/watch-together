@@ -5,6 +5,11 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.3.1] - 2026-07-26
+
+### 修复
+- **首次进房间时同一视频放两遍的回声**：页面首次加载常有多个 video 同时播放同一内容（此前需手动刷新才好）。现在换绑正片时会暂停旧的，并每 2 秒巡查暂停除正片外其他仍在播放的 video，只保留一个声音，无需再刷新
+
 ## [1.3.0] - 2026-07-26
 
 ### 新增
@@ -82,7 +87,8 @@
 - 断线自动重连：网络抖动后每 3 秒重连一次
 - 换集/切清晰度：播放器重建 video 元素时每 2 秒自动重新绑定
 
-[未发布]: https://github.com/Vizards8/watch-together/compare/v1.3.0...HEAD
+[未发布]: https://github.com/Vizards8/watch-together/compare/v1.3.1...HEAD
+[1.3.1]: https://github.com/Vizards8/watch-together/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/Vizards8/watch-together/compare/v1.2.2...v1.3.0
 [1.2.2]: https://github.com/Vizards8/watch-together/compare/v1.2.1...v1.2.2
 [1.2.1]: https://github.com/Vizards8/watch-together/compare/v1.2.0...v1.2.1
