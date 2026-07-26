@@ -29,6 +29,7 @@
     lastLocalActAt: 0,
     heartbeatTimer: null,   // 心跳定时器：定期广播自己的进度，兜住播放中的持续漂移
     isBuffering: false,     // 本地是否正在缓冲（卡顿），缓冲时不追赶对方，避免雪上加霜
+    nick: '朋友',           // 自己的昵称，发聊天时带上，让对方知道是谁说的
   };
 
   const now = () => Date.now();
@@ -247,6 +248,8 @@
       buildPanel();
       addMessage('sys', '已连接，等待对方加入…');
       startHeartbeat();
+      // 入场通报昵称，让已在房间的人看到"谁加入了"
+      send({ type: 'hello', name: state.nick });
       notifyPopup();
     };
 
@@ -266,7 +269,14 @@
         return;
       }
       if (msg.type === 'chat') {
-        addMessage('peer', msg.text);
+        addMessage('peer', msg.text, msg.name);
+        return;
+      }
+      if (msg.type === 'hello') {
+        // 对方入场通报，带昵称。提示"谁加入了"，比只报人数更清楚
+        if (msg.name) addMessage('sys', `${msg.name} 加入了 💕`);
+        // 回一个 hello，让对方也知道我的昵称（只回给新来的，避免风暴——这里简单地也广播）
+        if (!msg.reply) send({ type: 'hello', name: state.nick, reply: true });
         return;
       }
       if (msg.type === 'openurl') {
@@ -398,8 +408,13 @@
     ['keydown', 'keyup', 'keypress'].forEach((ev) =>
       input.addEventListener(ev, (e) => e.stopPropagation())
     );
+    // 输入法组合状态：中文拼音、英文候选等正在组合时，回车用于上屏/选词，不该触发发送
+    let composing = false;
+    input.addEventListener('compositionstart', () => { composing = true; });
+    input.addEventListener('compositionend', () => { composing = false; });
     input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') submitChat();
+      // e.isComposing 兜底：部分输入法 compositionend 与 keydown 时序不稳
+      if (e.key === 'Enter' && !composing && !e.isComposing) submitChat();
     });
     sendBtn.addEventListener('click', submitChat);
 
@@ -456,7 +471,7 @@
   function submitChat() {
     const text = panel.input.value.trim();
     if (!text) return;
-    send({ type: 'chat', text });
+    send({ type: 'chat', text, name: state.nick });
     addMessage('me', text);
     panel.input.value = '';
   }
@@ -579,9 +594,9 @@
     } catch {}
   }
 
-  // 追加一条消息。who: 'me' | 'peer' | 'sys'
+  // 追加一条消息。who: 'me' | 'peer' | 'sys'；name: 对方昵称（peer 时显示在气泡上方）
   let lastSysText = '', lastSysAt = 0;
-  function addMessage(who, text) {
+  function addMessage(who, text, name) {
     buildPanel();
     const isMe = who === 'me';
     const isSys = who === 'sys';
@@ -607,6 +622,13 @@
         'display:flex;flex-direction:column;max-width:80%;' +
         (isMe ? 'align-self:flex-end;align-items:flex-end;'
               : 'align-self:flex-start;align-items:flex-start;');
+      // 对方消息：气泡上方显示昵称，多人/进出场景下能分清是谁说的
+      if (!isMe && name) {
+        const nameEl = document.createElement('div');
+        nameEl.style.cssText = 'font-size:10px;color:#fb7299;margin:0 2px 2px;font-weight:600;';
+        nameEl.textContent = name;
+        row.appendChild(nameEl);
+      }
       const bubble = document.createElement('div');
       bubble.style.cssText =
         'padding:6px 10px;border-radius:10px;word-break:break-word;' +
@@ -647,6 +669,7 @@
       state.serverUrl = req.serverUrl;
       state.room = req.room;
       state.pass = req.pass;
+      if (req.nick) state.nick = req.nick;
       disconnect();
       connect();
       sendResponse({ ok: true });
@@ -662,7 +685,7 @@
         hasVideo: !!ensureVideo(),
       });
     } else if (req.type === 'chat') {
-      send({ type: 'chat', text: req.text });
+      send({ type: 'chat', text: req.text, name: state.nick });
       addMessage('me', req.text);
       sendResponse({ ok: true });
     }
@@ -691,11 +714,12 @@
   ensureVideo();
 
   // 若之前已保存过房间配置，自动重连
-  chrome.storage?.local?.get(['serverUrl', 'room', 'pass', 'autoJoin'], (cfg) => {
+  chrome.storage?.local?.get(['serverUrl', 'room', 'pass', 'nick', 'autoJoin'], (cfg) => {
     if (cfg.autoJoin && cfg.serverUrl && cfg.room) {
       state.serverUrl = cfg.serverUrl;
       state.room = cfg.room;
       state.pass = cfg.pass || '';
+      if (cfg.nick) state.nick = cfg.nick;
       connect();
     }
   });

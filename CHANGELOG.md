@@ -5,6 +5,14 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.3.0] - 2026-07-26
+
+### 新增
+- **昵称与说话人显示**：加入房间时可填昵称，聊天消息会显示是谁发的（对方消息气泡上方标注昵称），进出房间时提示"XXX 加入了"，多人或频繁进出时不再分不清谁在说话
+
+### 修复
+- **输入法回车误发送**：中文输入法下打字（拼音上屏、英文候选选词）按回车不再直接把内容发出去，只有文字确定后回车才发送
+
 ## [1.2.2] - 2026-07-25
 
 ### 变更
@@ -73,7 +81,8 @@
 - 断线自动重连：网络抖动后每 3 秒重连一次
 - 换集/切清晰度：播放器重建 video 元素时每 2 秒自动重新绑定
 
-[未发布]: https://github.com/Vizards8/watch-together/compare/v1.2.2...HEAD
+[未发布]: https://github.com/Vizards8/watch-together/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/Vizards8/watch-together/compare/v1.2.2...v1.3.0
 [1.2.2]: https://github.com/Vizards8/watch-together/compare/v1.2.1...v1.2.2
 [1.2.1]: https://github.com/Vizards8/watch-together/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/Vizards8/watch-together/compare/v1.1.1...v1.2.0

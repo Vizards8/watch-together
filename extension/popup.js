@@ -41,11 +41,12 @@ function render(status) {
 
 // 初始化：回填配置 + 查询当前状态
 (async () => {
-  const cfg = await chrome.storage.local.get(['serverUrl', 'room', 'pass']);
+  const cfg = await chrome.storage.local.get(['serverUrl', 'room', 'pass', 'nick']);
   // 高级设置里只在用户曾自定义过（与默认不同）时回填，否则留空走默认
   if (cfg.serverUrl && cfg.serverUrl !== DEFAULT_SERVER_URL) $('serverUrl').value = cfg.serverUrl;
   if (cfg.room) $('room').value = cfg.room;
   if (cfg.pass) $('pass').value = cfg.pass;
+  if (cfg.nick) $('nick').value = cfg.nick;
   const status = await sendToContent({ type: 'getStatus' });
   render(status);
 })();
@@ -55,6 +56,7 @@ $('joinBtn').addEventListener('click', async () => {
   const serverUrl = $('serverUrl').value.trim() || DEFAULT_SERVER_URL;
   const room = $('room').value.trim();
   const pass = $('pass').value;
+  const nick = $('nick').value.trim() || '朋友';
   if (!room) {
     alert('请填写房间号');
     return;
@@ -63,8 +65,8 @@ $('joinBtn').addEventListener('click', async () => {
     alert('还没配置中转服务地址，请在高级设置里填写');
     return;
   }
-  await chrome.storage.local.set({ serverUrl, room, pass, autoJoin: true });
-  const res = await sendToContent({ type: 'join', serverUrl, room, pass });
+  await chrome.storage.local.set({ serverUrl, room, pass, nick, autoJoin: true });
+  const res = await sendToContent({ type: 'join', serverUrl, room, pass, nick });
   if (!res) {
     alert('当前页面不是 B站/腾讯视频/爱奇艺，请先打开要看的视频页面');
     return;
