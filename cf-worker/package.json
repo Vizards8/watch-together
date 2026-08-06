@@ -1,0 +1,14 @@
+{
+  "name": "watch-together-cf-worker",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Cloudflare Workers + Durable Objects 版 WebSocket 中转服务",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail"
+  },
+  "devDependencies": {
+    "wrangler": "^4.118.0"
+  }
+}

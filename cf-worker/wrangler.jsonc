@@ -1,0 +1,23 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "watch-together",
+  "main": "src/index.js",
+  // Hibernation API 需要较新的 compat date
+  "compatibility_date": "2026-04-07",
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "ROOMS",
+        "class_name": "Room"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      // 必须是 new_sqlite_classes，不能用 new_classes：
+      // Workers 免费计划只支持 SQLite 存储后端的 DO，写成 new_classes 会部署失败
+      "new_sqlite_classes": ["Room"]
+    }
+  ]
+}

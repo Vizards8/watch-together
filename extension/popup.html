@@ -11,7 +11,20 @@
       font-size: 13px;
       color: #222;
     }
-    h1 { font-size: 15px; margin: 0 0 12px; }
+    h1 { font-size: 15px; margin: 0; }
+    .head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+    .head a {
+      font-size: 12px;
+      color: #fb7299;
+      text-decoration: none;
+      white-space: nowrap;
+    }
+    .head a:hover { text-decoration: underline; }
     label { display: block; margin: 8px 0 3px; color: #666; }
     input {
       width: 100%;
@@ -44,21 +57,27 @@
     }
     .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #ccc; margin-right: 5px; }
     .dot.on { background: #34c759; }
-    .chat-row { display: flex; gap: 6px; margin-top: 8px; }
-    .chat-row input { flex: 1; }
-    .chat-row button { width: 60px; margin-top: 0; }
+    .hint {
+      margin-top: 8px;
+      font-size: 11px;
+      color: #999;
+      line-height: 1.5;
+    }
   </style>
 </head>
 <body>
-  <h1>一起看 🎬</h1>
+  <div class="head">
+    <h1>一起看 🎬</h1>
+    <a id="helpLink" href="help.html" target="_blank">怎么用？</a>
+  </div>
 
   <label>你的昵称</label>
-  <input id="nick" placeholder="对方会看到这个名字" maxlength="12" />
+  <input id="nick" placeholder="大家会看到这个名字" maxlength="12" />
 
-  <label>房间号（和对方约定一致）</label>
+  <label>房间号（和大家说好同一个）</label>
   <input id="room" placeholder="例如 我俩的小屋" />
 
-  <label>房间密码（和对方约定一致）</label>
+  <label>房间密码（和大家说好同一个）</label>
   <input id="pass" type="password" placeholder="留空则无密码" />
 
   <button id="joinBtn">加入房间</button>
@@ -66,7 +85,7 @@
   <details style="margin-top:10px">
     <summary style="cursor:pointer;color:#999;font-size:12px">高级设置</summary>
     <label>中转服务地址（留空用默认）</label>
-    <input id="serverUrl" placeholder="wss://xxx.up.railway.app" />
+    <input id="serverUrl" placeholder="wss://xxx.workers.dev" />
   </details>
   <button id="leaveBtn" class="leave" style="display:none">离开</button>
 
@@ -74,9 +93,9 @@
     <span class="dot" id="dot"></span><span id="statusText">未连接</span>
   </div>
 
-  <div class="chat-row" id="chatRow" style="display:none">
-    <input id="chatInput" placeholder="发一句话给对方" />
-    <button id="chatBtn">发送</button>
+  <!-- 聊天在页面上的悬浮面板里进行，不必再开插件弹窗，所以这里不放输入框 -->
+  <div id="chatHint" class="hint" style="display:none">
+    💬 想说话就在视频页的小面板里直接打字
   </div>
 
   <script src="popup.js"></script>

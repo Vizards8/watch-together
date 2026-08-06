@@ -18,3 +18,8 @@ shot*.png
 make_screenshots.py
 make_icon.py
 watch-together-extension.zip
+
+# Cloudflare Workers 本地状态与构建缓存（含本地 Durable Objects 数据）
+cf-worker/.wrangler/
+# 编辑器/工具的本地目录
+.claude/

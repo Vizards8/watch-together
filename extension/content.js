@@ -11,10 +11,38 @@
 (() => {
   'use strict';
 
+  // manifest 里 all_frames: true，是为了兼容播放器藏在同源 iframe 里的情况。
+  // 但副作用是同源 iframe 也会各自注入一份本脚本、各开一条 WebSocket，于是
+  // 一个人进房间服务端却看到 2 条连接 —— 表现为"只有我却提示对方已加入"，
+  // 以及 iframe 被销毁重建时（切集、广告）反复"加入/离开"刷屏。
+  // 腾讯视频实测有同源 iframe：v.qq.com/thumbplayer-offline-log.html。
+  //
+  // 解决：只有顶层文档负责联网与 UI，iframe 里的实例直接退出。
+  // 实测 B站/腾讯/爱奇艺的 <video> 都在顶层文档里（同源 iframe 内为 0 个），
+  // 所以这么做不会漏掉播放器。日后若遇到播放器真在 iframe 内的站点，
+  // 需要改成顶层单连接 + frame 内转发的架构，而不是各自建连接。
+  const isTopFrame = (() => {
+    try {
+      return window.top === window.self;
+    } catch {
+      return false; // 读不到 top 说明被跨域嵌套，那就不是顶层
+    }
+  })();
+  if (!isTopFrame) return;
+
+  // 默认中转地址，需与 popup.js 保持一致
+  const DEFAULT_SERVER_URL = 'wss://watch-together.laphi.workers.dev';
+
+  // 已废弃的旧中转地址，见 popup.js 同名常量
+  const LEGACY_SERVER_URLS = [
+    'wss://watch-together-production-d1c9.up.railway.app',
+  ];
+
   const state = {
     ws: null,
     room: null,
     serverUrl: null,
+    clientId: null,        // 浏览器级标识，同一浏览器的所有标签页共用，用于人数去重
     connected: false,
     applyingRemote: false, // 硬锁：同步执行的一瞬间，屏蔽即时触发的本地事件
     video: null,
@@ -106,6 +134,13 @@
     v.addEventListener('canplay', () => { state.isBuffering = false; });
   }
 
+  // 取远端消息里的昵称，用于"谁做了什么"的提示。
+  // 1.4.0 之前的客户端不带 name，此时退回中性称呼，不能显示 undefined。
+  function peerName(msg) {
+    const n = msg && typeof msg.name === 'string' ? msg.name.trim() : '';
+    return n || '有人';
+  }
+
   // ---------- 把远端指令作用到本地视频 ----------
   function applyRemote(msg) {
     const v = ensureVideo();
@@ -136,16 +171,18 @@
       ) {
         v.currentTime = msg.time;
       }
+      // 操作提示带上是谁做的。房间可能有多人，笼统说"对方"分不清。
+      const who = peerName(msg);
       if (msg.type === 'play') {
         v.play().catch(() => {});
-        addMessage('sys', '对方点了播放 ▶');
+        addMessage('sys', `${who}点了播放 ▶`);
       } else if (msg.type === 'pause') {
         v.pause();
-        addMessage('sys', '对方按了暂停 ⏸');
+        addMessage('sys', `${who}按了暂停 ⏸`);
       } else if (msg.type === 'seek') {
         if (msg.paused) v.pause();
         else v.play().catch(() => {});
-        addMessage('sys', '对方跳到了 ' + fmtTime(msg.time));
+        addMessage('sys', `${who}跳到了 ` + fmtTime(msg.time));
       }
     } finally {
       // 硬锁只保护"同步执行的这一瞬间"里立刻同步触发的事件；
@@ -210,18 +247,19 @@
     return `${m}:${s < 10 ? '0' : ''}${s}`;
   }
 
-  // 收到对方发来的"打开这个页面"。已在同一页则忽略；否则跳转前保存好房间配置，
+  // 收到别人发来的"打开这个页面"。已在同一页则忽略；否则跳转前保存好房间配置，
   // 让跳转后的新页面能靠 autoJoin 自动重连，聊天面板和同步会自动恢复。
-  function handleOpenUrl(url) {
+  function handleOpenUrl(url, who) {
     if (!url) return;
+    const name = who || '有人';
     // 归一化对比：忽略 hash 等细枝末节
     const strip = (u) => u.split('#')[0];
     if (strip(url) === strip(location.href)) {
-      addMessage('sys', '对方想一起看这页，你已经在这了');
+      addMessage('sys', `${name}想一起看这页，你已经坐这儿了 🎬`);
       return;
     }
     buildPanel();
-    addMessage('sys', '对方邀请你打开新页面，即将跳转…');
+    addMessage('sys', `${name}拉你入座，马上过去…`);
     // 确保当前房间配置已持久化（跳转后新页面自动重连需要）
     chrome.storage?.local?.set?.({
       serverUrl: state.serverUrl,
@@ -243,7 +281,9 @@
     state.manualLeave = false;
     const url =
       `${state.serverUrl}?room=${encodeURIComponent(state.room)}` +
-      `&pass=${encodeURIComponent(state.pass || '')}`;
+      `&pass=${encodeURIComponent(state.pass || '')}` +
+      // 浏览器级标识，让服务端把同一个人的多个标签页算作一个人
+      `&client=${encodeURIComponent(state.clientId || '')}`;
     log('连接中：' + url);
 
     let ws;
@@ -260,7 +300,14 @@
       state.connected = true;
       log('已连接到中转服务');
       buildPanel();
-      addMessage('sys', '已连接，等待对方加入…');
+      addMessage('sys', '连上了，等大家来…');
+      // 第一次用的时候指一下说明在哪，之后不再提。标记记在 storage 里，换页也不会重复弹
+      chrome.storage?.local?.get(['helpShown'], (c) => {
+        if (!c?.helpShown) {
+          addMessage('sys', '第一次用？', 'help');
+          chrome.storage?.local?.set?.({ helpShown: true });
+        }
+      });
       startHeartbeat();
       // 入场通报昵称，让已在房间的人看到"谁加入了"
       send({ type: 'hello', name: state.nick });
@@ -277,8 +324,11 @@
       if (msg.type === 'presence') {
         const prev = state.peerCount || 0;
         state.peerCount = msg.count;
-        if (msg.count >= 2 && prev < 2) addMessage('sys', '对方已加入 💕');
-        else if (msg.count < 2 && prev >= 2) addMessage('sys', '对方离开了');
+        // 只报人数变化，不说"谁"——presence 里没有昵称信息。
+        // "谁加入了"由带昵称的 hello 消息负责，避免同一件事报两遍。
+        if (msg.count < prev && msg.count >= 1) {
+          addMessage('sys', `有人走了，还剩 ${msg.count} 人在看`);
+        }
         notifyPopup();
         return;
       }
@@ -287,14 +337,14 @@
         return;
       }
       if (msg.type === 'hello') {
-        // 对方入场通报，带昵称。提示"谁加入了"，比只报人数更清楚
+        // 别人入场通报，带昵称。提示"谁加入了"，比只报人数更清楚
         if (msg.name) addMessage('sys', `${msg.name} 加入了 💕`);
         // 回一个 hello，让对方也知道我的昵称（只回给新来的，避免风暴——这里简单地也广播）
         if (!msg.reply) send({ type: 'hello', name: state.nick, reply: true });
         return;
       }
       if (msg.type === 'openurl') {
-        handleOpenUrl(msg.url);
+        handleOpenUrl(msg.url, peerName(msg));
         return;
       }
       if (msg.type === 'sync') {
@@ -329,7 +379,9 @@
 
   function send(msg) {
     if (state.ws && state.ws.readyState === 1) {
-      state.ws.send(JSON.stringify(msg));
+      // 统一带上昵称，收到方才能显示"谁"做了操作而不是笼统的"对方"。
+      // 放在这里而不是每个 send 调用点，是为了以后加新消息类型时不会漏。
+      state.ws.send(JSON.stringify({ name: state.nick, ...msg }));
     }
   }
 
@@ -343,11 +395,31 @@
     state.connected = false;
     clearTimeout(state.reconnectTimer);
     state.reconnectTimer = null;
-    // 主动离开时移除面板
+    destroyPanel();
+  }
+
+  // 拆掉整个面板。root 和 bubble 是两个独立挂在页面上的元素，
+  // 只删 root 会留下小圆标；而 buildPanel 的守卫看的是 root，
+  // 于是下次加入又造一个圆标，页面上就越点越多。时钟定时器也要一起清，
+  // 否则每次重建都多一个 interval。
+  function destroyPanel() {
+    if (panel.clockTimer) {
+      clearInterval(panel.clockTimer);
+      panel.clockTimer = null;
+    }
     if (panel.root) {
       panel.root.remove();
       panel.root = null;
     }
+    if (panel.bubble) {
+      panel.bubble.remove();
+      panel.bubble = null;
+    }
+    panel.body = null;
+    panel.input = null;
+    panel.unread = 0;
+    // 注意别在这里重置 panel.collapsed：那会连带用 saveCollapsed 覆盖掉
+    // 用户的展开/收起偏好。下次 buildPanel 会从 localStorage 重新读。
   }
 
 
@@ -356,10 +428,29 @@
   // 面板自带输入框，直接在页面上就能发消息，不必每次开插件弹窗。
   // collapsed=true 时只显示边缘小圆标（bubble），完整面板（root）隐藏，不挡画面。
   // 点小圆标展开，点面板「—」收回小圆标。默认收起。
-  const panel = { root: null, body: null, input: null, bubble: null, collapsed: true, unread: 0 };
+  // 小圆标的直径。定位时要用它算"向上展开"的位置，所以提成常量，
+  // 别和样式里的写死值分开维护
+  const BUBBLE_SIZE = 44;
+
+  // 下面这几个常量必须声明在 buildPanel / setCollapsed 之前。
+  // 函数声明会提升，但 const 不会：如果放在后面，buildPanel 里调用
+  // loadCollapsed() → 读 COLLAPSED_KEY 会抛 ReferenceError（TDZ），
+  // 面板直接建不出来，表现就是"点了加入房间没反应"。
+  const ANCHOR_KEY = 'watchTogetherAnchor2';   // 面板/圆标共享的位置
+  const COLLAPSED_KEY = 'watchTogetherCollapsed'; // 收起状态
+  const PANEL_H_GUESS = 320;   // 面板高度，用于反推默认位置的顶端
+  const BOTTOM_GAP = 120;      // 默认位置离视口底部的空隙，躲开播放器控件条
+
+  const panel = {
+    root: null, body: null, input: null, bubble: null,
+    collapsed: true, unread: 0,
+    clockTimer: null, // 标题栏时钟的 interval，销毁面板时要清掉
+  };
 
   function buildPanel() {
     if (panel.root) return;
+    // 兜底：若上次只清掉了 root、圆标还挂在页面上，先拆干净再重建，避免叠出多个圆标
+    if (panel.bubble) destroyPanel();
 
     const root = document.createElement('div');
     root.style.cssText =
@@ -378,8 +469,8 @@
       '<span>💬 一起看 <span data-role="clock" ' +
       'style="font-weight:400;font-size:12px;opacity:.9;margin-left:4px"></span></span>' +
       '<span style="display:flex;gap:10px;align-items:center">' +
-      '<span data-act="openurl" title="让对方打开你当前的视频页" ' +
-      'style="cursor:pointer;opacity:.95;font-size:12px">🔗 喊 TA 来</span>' +
+      '<span data-act="openurl" title="拉大家入座 —— 把当前视频页发过去，大家会自动跳来这一页" ' +
+      'style="cursor:pointer;opacity:.95;font-size:12px">🎬 拉你入座</span>' +
       '<span data-act="toggle" style="cursor:pointer;opacity:.9">—</span>' +
       '</span>';
 
@@ -397,7 +488,6 @@
     input.style.cssText =
       'flex:1;border:none;border-radius:6px;padding:7px 9px;font-size:13px;' +
       'background:rgba(255,255,255,.12);color:#fff;outline:none;';
-    input.setAttribute('placeholder', '说点什么…');
     const sendBtn = document.createElement('button');
     sendBtn.textContent = '发送';
     sendBtn.style.cssText =
@@ -416,10 +506,7 @@
     panel.input = input;
     panel.foot = foot;
 
-    // 恢复上次位置，默认右下角
-    const pos = loadPanelPos();
-    root.style.left = pos.left;
-    root.style.top = pos.top;
+    // 位置在 setCollapsed 里按共享锚点统一摆放（那时元素已挂上、量得到尺寸）
 
     // 输入时阻止按键冒泡到播放器（否则空格会暂停视频、方向键会快进）
     ['keydown', 'keyup', 'keypress'].forEach((ev) =>
@@ -441,11 +528,11 @@
       togglePanel();
     });
 
-    // 拉对方过来：把当前页 URL 发给对方，让 TA 的浏览器跳到同一页
+    // 拉人过来：把当前页 URL 发给房间里的其他人，让他们的浏览器跳到同一页
     bar.querySelector('[data-act="openurl"]').addEventListener('click', (e) => {
       e.stopPropagation();
       send({ type: 'openurl', url: location.href });
-      addMessage('sys', '已把当前页发给对方');
+      addMessage('sys', '已经拉大家入座了 🎬');
     });
 
     enableDrag(root, bar);
@@ -454,12 +541,12 @@
     const clockEl = bar.querySelector('[data-role="clock"]');
     const tick = () => { if (clockEl) clockEl.textContent = clockHM(); };
     tick();
-    setInterval(tick, 15000);
+    panel.clockTimer = setInterval(tick, 15000);
 
     // 边缘小圆标：平时只露这个，不挡画面。点它展开完整面板。
     const bubble = document.createElement('div');
     bubble.style.cssText =
-      'position:fixed;z-index:2147483647;width:44px;height:44px;border-radius:50%;' +
+      `position:fixed;z-index:2147483647;width:${BUBBLE_SIZE}px;height:${BUBBLE_SIZE}px;border-radius:50%;` +
       'background:#fb7299;color:#fff;display:flex;align-items:center;justify-content:center;' +
       'font-size:20px;cursor:pointer;box-shadow:0 3px 12px rgba(0,0,0,.35);' +
       'user-select:none;transition:transform .15s;';
@@ -468,18 +555,17 @@
       'min-width:16px;height:16px;line-height:16px;padding:0 4px;border-radius:8px;' +
       'background:#ff3b30;color:#fff;font-size:11px;text-align:center;display:none"></span>';
     bubble.title = '一起看 · 点击展开';
-    // 小圆标默认停右下角
-    const bpos = loadBubblePos();
-    bubble.style.left = bpos.left;
-    bubble.style.top = bpos.top;
+    // 位置同样交给 setCollapsed 按共享锚点摆放
     document.documentElement.appendChild(bubble);
     panel.bubble = bubble;
 
     bubble.addEventListener('click', () => setCollapsed(false));
     enableBubbleDrag(bubble);
 
-    // 默认收起为小圆标
-    setCollapsed(true);
+    // 默认展开。只露一个 44px 的小圆标太不显眼，容易以为"点了加入没反应"；
+    // 展开着能直接看到"连上了"和聊天内容，也一眼知道收起按钮在哪。
+    // 收起状态由用户自己决定，记在 localStorage 里，下次按上次的来。
+    setCollapsed(loadCollapsed());
 
     // 若当前正处于全屏，面板要挂到全屏元素里才可见
     relocatePanel();
@@ -498,11 +584,24 @@
   }
 
   // 收起：隐藏完整面板，显示小圆标。展开：反之，并清空未读。
+  // 两者共用锚点，所以每次切换都按锚点重新摆一次，做到"原地收放"。
   function setCollapsed(collapsed) {
     panel.collapsed = collapsed;
+    saveCollapsed(collapsed);
     if (!panel.root) return;
+
+    const anchor = loadAnchor();
     panel.root.style.display = collapsed ? 'none' : 'block';
     if (panel.bubble) panel.bubble.style.display = collapsed ? 'flex' : 'none';
+
+    // 必须在 display 生效之后再定位：隐藏元素的 offsetWidth 是 0，算不出正确位置
+    if (collapsed) {
+      placeByAnchor(panel.bubble, anchor);
+    } else {
+      // 传圆标高度，好让面板在下方空间不足时改为向上展开
+      placeByAnchor(panel.root, anchor, BUBBLE_SIZE);
+    }
+
     if (!collapsed) {
       panel.unread = 0;
       updateBadge();
@@ -551,8 +650,10 @@
       if (!dragging) return;
       dragging = false;
       if (moved) {
-        // 拖动过就记住位置，并阻止这次的 click 展开
-        saveBubblePos(el.style.left, el.style.top);
+        // 拖动过就记住位置，并阻止这次的 click 展开。
+        // 写的是共享锚点，所以下次展开面板也会出现在这儿
+        const a = anchorOf(el);
+        saveAnchor(a.right, a.top);
         const block = (ev) => { ev.stopPropagation(); el.removeEventListener('click', block, true); };
         el.addEventListener('click', block, true);
       }
@@ -582,36 +683,103 @@
     document.addEventListener('mouseup', () => {
       if (!dragging) return;
       dragging = false;
-      savePanelPos(root.style.left, root.style.top);
+      // 写共享锚点，收起时圆标就落在面板刚才的位置
+      const a = anchorOf(root);
+      saveAnchor(a.right, a.top);
     });
   }
 
-  function loadPanelPos() {
-    try {
-      const raw = localStorage.getItem('watchTogetherPanelPos');
-      if (raw) return JSON.parse(raw);
-    } catch {}
-    return { left: window.innerWidth - 280 + 'px', top: window.innerHeight - 360 + 'px' };
+  // 面板和小圆标共用一个"锚点"，记的是【右上角】坐标。
+  // 之前两者各记一套位置，把面板拖到左边、收起时圆标还停在右下角，看着就是跳了一下。
+  //
+  // 为什么对齐右上角：收起按钮「—」就在标题栏右上角，点它的瞬间视线和鼠标
+  // 都停在那里，圆标就该出现在那儿。之前按右下角对齐，圆标跑到了面板底部
+  // （发送按钮那一侧），离刚点的地方隔了一整个面板的高度。
+  // 默认位置。两个约束互相拉扯：
+  // 往上会被插件弹窗遮住（弹窗贴浏览器右上角，从视口顶部往下约 420px），
+  // 往下又会被播放器底部控件盖住，而且视口只有 577 高时（B站实测）
+  // 320px 的面板压根塞不进"弹窗下方"这段空间。
+  //
+  // 所以不用固定像素，改成按视口算：面板底边离视口底 BOTTOM_GAP，
+  // 顶端自然落在下半部分。视口再矮也只是贴着底，不会被夹得跑上去。
+  // （BOTTOM_GAP / PANEL_H_GUESS 声明在文件靠前处，见 TDZ 注释）
+  function defaultAnchor() {
+    const top = Math.max(
+      12,
+      window.innerHeight - BOTTOM_GAP - PANEL_H_GUESS
+    );
+    return { right: 24, top };
   }
-  function savePanelPos(left, top) {
+
+  function loadAnchor() {
     try {
-      localStorage.setItem('watchTogetherPanelPos', JSON.stringify({ left, top }));
+      const raw = localStorage.getItem(ANCHOR_KEY);
+      if (raw) {
+        const a = JSON.parse(raw);
+        if (typeof a?.right === 'number' && typeof a?.top === 'number') return a;
+      }
     } catch {}
+    return defaultAnchor();
   }
-  function loadBubblePos() {
+
+  function saveAnchor(right, top) {
     try {
-      const raw = localStorage.getItem('watchTogetherBubblePos');
-      if (raw) return JSON.parse(raw);
-    } catch {}
-    return { left: window.innerWidth - 64 + 'px', top: window.innerHeight - 84 + 'px' };
-  }
-  function saveBubblePos(left, top) {
-    try {
-      localStorage.setItem('watchTogetherBubblePos', JSON.stringify({ left, top }));
+      localStorage.setItem(ANCHOR_KEY, JSON.stringify({ right, top }));
     } catch {}
   }
 
-  // 追加一条消息。who: 'me' | 'peer' | 'sys'；name: 对方昵称（peer 时显示在气泡上方）
+  // 按锚点摆放某个元素：右上角对齐到锚点，同时夹在视口内。
+  //
+  // 面板比圆标高得多（320 vs 44），锚点靠下时向下展开会超出视口。
+  // 这时改成向上展开：把底边对齐到"圆标底边所在的位置"，右上角虽然不再
+  // 贴着锚点，但展开方向朝着有空间的一侧，不会被硬夹到别处去。
+  // bubbleH 传入圆标高度，用来算那条底边；不传就按纯右上角对齐处理。
+  function placeByAnchor(el, anchor, bubbleH) {
+    if (!el) return;
+    const w = el.offsetWidth || 0;
+    const h = el.offsetHeight || 0;
+
+    let left = window.innerWidth - anchor.right - w;
+    left = Math.max(0, Math.min(left, window.innerWidth - w));
+
+    let top = anchor.top;
+    if (bubbleH && top + h > window.innerHeight) {
+      // 下方装不下：底边对齐圆标底边，改为向上展开
+      top = anchor.top + bubbleH - h;
+    }
+    top = Math.max(0, Math.min(top, window.innerHeight - h));
+
+    el.style.left = left + 'px';
+    el.style.top = top + 'px';
+  }
+
+  // 从元素当前位置反推锚点（右上角相对视口的位置）
+  function anchorOf(el) {
+    const r = el.getBoundingClientRect();
+    return {
+      right: Math.round(window.innerWidth - r.right),
+      top: Math.round(r.top),
+    };
+  }
+
+  // 收起状态也记住：默认展开（更显眼），但用户手动收起后下次就保持收起，
+  // 不要每次连上都弹开挡画面。（COLLAPSED_KEY 声明在文件靠前处，见 TDZ 注释）
+  function loadCollapsed() {
+    try {
+      return localStorage.getItem(COLLAPSED_KEY) === '1';
+    } catch {
+      return false; // 读不到就按默认的展开处理
+    }
+  }
+
+  function saveCollapsed(collapsed) {
+    try {
+      localStorage.setItem(COLLAPSED_KEY, collapsed ? '1' : '0');
+    } catch {}
+  }
+
+  // 追加一条消息。who: 'me' | 'peer' | 'sys'；
+  // name: 发送者昵称，显示在气泡上方（me 时不传则用 state.nick）
   let lastSysText = '', lastSysAt = 0;
   function addMessage(who, text, name) {
     buildPanel();
@@ -633,17 +801,32 @@
     if (isSys) {
       row.style.cssText = 'align-self:center;color:#aaa;font-size:11px;';
       row.textContent = text;
+      // name 在 sys 消息里复用为"附一个可点链接"：用于首次连上时指向使用说明。
+      // 用 textContent + appendChild 而不是 innerHTML，避免把消息内容当 HTML 解析。
+      if (name === 'help') {
+        row.appendChild(document.createTextNode(' '));
+        const a = document.createElement('a');
+        a.textContent = '看使用说明';
+        a.href = chrome.runtime.getURL('help.html');
+        a.target = '_blank';
+        a.style.cssText = 'color:#fb7299;text-decoration:underline;cursor:pointer;';
+        row.appendChild(a);
+      }
     } else {
       // 聊天气泡 + 下方小字时间戳
       row.style.cssText =
         'display:flex;flex-direction:column;max-width:80%;' +
         (isMe ? 'align-self:flex-end;align-items:flex-end;'
               : 'align-self:flex-start;align-items:flex-start;');
-      // 对方消息：气泡上方显示昵称，多人/进出场景下能分清是谁说的
-      if (!isMe && name) {
+      // 气泡上方显示昵称。自己的消息也显示（用自己的昵称），
+      // 多人在场时才能一眼看清每句是谁说的。自己的昵称用淡色，跟别人区分开。
+      const label = isMe ? (name || state.nick) : name;
+      if (label) {
         const nameEl = document.createElement('div');
-        nameEl.style.cssText = 'font-size:10px;color:#fb7299;margin:0 2px 2px;font-weight:600;';
-        nameEl.textContent = name;
+        nameEl.style.cssText =
+          'font-size:10px;margin:0 2px 2px;font-weight:600;' +
+          (isMe ? 'color:rgba(255,255,255,.55);' : 'color:#fb7299;');
+        nameEl.textContent = label;
         row.appendChild(nameEl);
       }
       const bubble = document.createElement('div');
@@ -688,7 +871,7 @@
       state.pass = req.pass;
       if (req.nick) state.nick = req.nick;
       disconnect();
-      connect();
+      ensureClientId(connect);
       sendResponse({ ok: true });
     } else if (req.type === 'leave') {
       // 清掉自动重连标志，避免刷新/重开页面后又自动加回房间
@@ -703,10 +886,6 @@
         peerCount: state.peerCount || 0,
         hasVideo: !!ensureVideo(),
       });
-    } else if (req.type === 'chat') {
-      send({ type: 'chat', text: req.text, name: state.nick });
-      addMessage('me', req.text);
-      sendResponse({ ok: true });
     }
     return true; // 异步 sendResponse
   });
@@ -727,19 +906,65 @@
     document.addEventListener(ev, relocatePanel)
   );
 
+  // 窗口尺寸变了（进出全屏、缩放窗口）按锚点重排，否则面板可能跑到视口外。
+  // 锚点记的是到右下角的距离，所以重排后相对位置观感不变。
+  window.addEventListener('resize', () => {
+    if (!panel.root) return;
+    const anchor = loadAnchor();
+    if (panel.collapsed) placeByAnchor(panel.bubble, anchor);
+    else placeByAnchor(panel.root, anchor, BUBBLE_SIZE);
+  });
+
   // ---------- 启动 ----------
   // 页面里的 video 可能延迟出现，持续探测
   setInterval(ensureVideo, 2000);
   ensureVideo();
 
+  // 读出（首次则生成）浏览器级 clientId。存在 chrome.storage 里，
+  // 所以同一浏览器的所有标签页拿到的是同一个值，服务端据此把多个页面算作一个人。
+  function ensureClientId(cb) {
+    if (state.clientId) return cb();
+    chrome.storage?.local?.get(['clientId'], (cfg) => {
+      if (cfg?.clientId) {
+        state.clientId = cfg.clientId;
+      } else {
+        state.clientId =
+          (crypto.randomUUID?.() || String(now()) + Math.random().toString(36).slice(2));
+        chrome.storage?.local?.set?.({ clientId: state.clientId });
+      }
+      cb();
+    });
+  }
+
   // 若之前已保存过房间配置，自动重连
   chrome.storage?.local?.get(['serverUrl', 'room', 'pass', 'nick', 'autoJoin'], (cfg) => {
-    if (cfg.autoJoin && cfg.serverUrl && cfg.room) {
-      state.serverUrl = cfg.serverUrl;
+    // storage 里存的是已废弃的旧地址：直接删掉这一项，回落到 DEFAULT_SERVER_URL。
+    // popup 只在点图标时才跑，而打开视频页是走这条自动重连的路径，所以这里也得拦一次。
+    if (cfg.serverUrl && LEGACY_SERVER_URLS.includes(cfg.serverUrl)) {
+      chrome.storage.local.remove('serverUrl');
+      cfg.serverUrl = null;
+    }
+    // 没存地址 = 用内置默认。判断条件只看 room，别再要求 serverUrl 存在
+    if (cfg.autoJoin && cfg.room) {
+      state.serverUrl = cfg.serverUrl || DEFAULT_SERVER_URL;
       state.room = cfg.room;
       state.pass = cfg.pass || '';
       if (cfg.nick) state.nick = cfg.nick;
-      connect();
+      ensureClientId(connect);
+    }
+  });
+
+  // 跨标签页同步"离开"：popup 只能给当前标签页发消息，但你可能开了好几个视频页。
+  // autoJoin 被置为 false 就是"全体离开"的信号，其他页看到就各自断开，
+  // 否则它们仍连着、还会把"已连接"推给 popup，按钮就闪回"离开"了。
+  chrome.storage?.onChanged?.addListener((changes, area) => {
+    if (area !== 'local') return;
+    if (changes.autoJoin && changes.autoJoin.newValue === false) {
+      if (state.ws || state.connected) {
+        // 注意别在这之后调 addMessage：它会 buildPanel() 把刚拆掉的面板又建回来
+        disconnect();
+        notifyPopup();
+      }
     }
   });
 
